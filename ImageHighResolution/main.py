@@ -2,20 +2,25 @@ import os
 import tensorflow as tf
 import numpy as np
 
+from collections import namedtuple
 from PIL import Image
 from utils import Batch
 
 
 FLAGS = tf.app.flags.FLAGS
-
 tf.app.flags.DEFINE_string('input_dir', './images/input/', 'input images directory')
 tf.app.flags.DEFINE_string('target_dir', './images/target/', 'target images directory')
-tf.app.flags.DEFINE_integer('batch_size', 16, 'batch size')
 
+HyperParams = namedtuple(
+    'HyperParams',
+    [
+        'batch_size',
+        'learning_rate'
+    ]
+)
 
 INPUT_DIR = FLAGS.input_dir
 TARGET_DIR = FLAGS.target_dir
-BATCH_SIZE = FLAGS.batch_size
 
 INPUT_HEIGHT = 16
 INPUT_WIDTH = 16
@@ -26,89 +31,126 @@ TARGET_WIDTH = 32
 TARGET_CHANNELS = 3
 
 
+def load_images(dir_path):
+    images = []
+    for img_name in sorted(os.listdir(dir_path)):
+        img_path = dir_path + img_name
+        img = Image.open(img_path)
+        arr_img = np.array(img, 'int32')
+        images.append(arr_img)
+    return images
+
+
+def save_image(save_path, arr_image):
+    image = Image.fromarray(np.asarray(np.clip(arr_image * 255, 0, 255), 'uint8'), 'RGB')
+    image.save(save_path)
+
+
+def convolution(inputs, filters):
+    return tf.layers.conv2d(
+        inputs=inputs,
+        filters=filters,
+        kernel_size=5,
+        strides=(1, 1),
+        padding='same',
+        activation=tf.nn.leaky_relu
+    )
+
+
+def deconvolution(inputs, filters):
+    return tf.layers.conv2d_transpose(
+        inputs=inputs,
+        filters=filters,
+        kernel_size=5,
+        strides=(2, 2),
+        padding='same',
+        activation=tf.nn.leaky_relu
+    )
+
+
+def dense(inputs, units):
+    return tf.layers.dense(
+        inputs=inputs,
+        units=units,
+        activation=tf.nn.leaky_relu
+    )
+
+
 def main(argv):
 
     if len(argv) != 1:
         raise Exception
 
-    input_images = []
-    target_images = []
+    hps = HyperParams(
+        batch_size=64,
+        learning_rate=0.0001
+    )
 
-    for img_name in sorted(os.listdir(INPUT_DIR)):
-        img_path = INPUT_DIR + img_name
-        img = Image.open(img_path)
-        img.load()
-        data = np.asarray(img, 'int32')
-        input_images.append(data)
-    for img_name in sorted(os.listdir(TARGET_DIR)):
-        img_path = TARGET_DIR + img_name
-        img = Image.open(img_path)
-        img.load()
-        data = np.asarray(img, 'int32')
-        target_images.append(data)
+    input_images = load_images(INPUT_DIR)
+    target_images = load_images(TARGET_DIR)
 
-    batch = Batch(input_images, target_images, BATCH_SIZE)
+    batch = Batch(input_images, target_images, hps.batch_size)
 
-    with tf.Graph().as_default():
+    inputs = tf.placeholder(tf.float32, [None, INPUT_HEIGHT, INPUT_WIDTH, INPUT_CHANNELS])
+    targets = tf.placeholder(tf.float32, [None, TARGET_HEIGHT, TARGET_WIDTH, TARGET_CHANNELS])
 
-        inputs = tf.placeholder(tf.float32, [None, INPUT_HEIGHT, INPUT_WIDTH, INPUT_CHANNELS])
-        targets = tf.placeholder(tf.float32, [None, TARGET_HEIGHT, TARGET_WIDTH, TARGET_CHANNELS])
+    '''
+    convolution1 = convolution(inputs, 12)
+    convolution2 = convolution(convolution1, 48)
+    convolution3 = convolution(convolution2, 192)
+    convolution4 = convolution(convolution3, 768)
 
-        strides = [1, 1, 1, 1]
+    convolution4_flat = tf.reshape(convolution4, [-1, 1 * 1 * 768])
+    dense1 = dense(convolution4_flat, 1 * 1 * 768)
 
-        filter1 = tf.Variable(tf.truncated_normal([2, 2, INPUT_CHANNELS, 12], stddev=0.1))
-        bias1 = tf.Variable(tf.zeros([12]))
-        convolution1 = tf.nn.leaky_relu(tf.nn.conv2d(inputs, filter1, strides, padding='SAME') + bias1, 0.2)
-        max_pool1 = tf.nn.max_pool(convolution1, [1, 2, 2, 1], [1, 2, 2, 1], 'SAME')
+    deconvolution1 = deconvolution(tf.reshape(dense1, [-1, 1, 1, 768]), 192)
+    deconvolution2 = deconvolution(deconvolution1, 48)
+    deconvolution3 = deconvolution(deconvolution2, 12)
+    deconvolution4 = deconvolution(deconvolution3, 3)
+    deconvolution5 = deconvolution(deconvolution4, 3)
 
-        filter2 = tf.Variable(tf.truncated_normal([2, 2, 12, 48], stddev=0.1))
-        bias2 = tf.Variable(tf.zeros([48]))
-        convolution2 = tf.nn.leaky_relu(tf.nn.conv2d(max_pool1, filter2, strides, padding='SAME') + bias2, 0.2)
-        max_pool2 = tf.nn.max_pool(convolution2, [1, 2, 2, 1], [1, 2, 2, 1], 'SAME')
+    deconvolution5_flat = tf.reshape(deconvolution5, [-1, 32 * 32 * 3])
+    dense2 = dense(deconvolution5_flat, 32 * 32 * 3)
 
-        filter3 = tf.Variable(tf.truncated_normal([2, 2, 48, 192], stddev=0.1))
-        bias3 = tf.Variable(tf.zeros([192]))
-        convolution3 = tf.nn.leaky_relu(tf.nn.conv2d(max_pool2, filter3, strides, padding='SAME') + bias3, 0.2)
-        max_pool3 = tf.nn.max_pool(convolution3, [1, 2, 2, 1], [1, 2, 2, 1], 'SAME')
+    predict = tf.reshape(dense2, [-1, 32, 32, 3])
+    '''
 
-        filter4 = tf.Variable(tf.truncated_normal([2, 2, 192, 768], stddev=0.1))
-        bias4 = tf.Variable(tf.zeros([768]))
-        convolution4 = tf.nn.leaky_relu(tf.nn.conv2d(max_pool3, filter4, strides, padding='SAME') + bias4, 0.2)
-        max_pool4 = tf.nn.max_pool(convolution4, [1, 2, 2, 1], [1, 2, 2, 1], 'SAME')
+    deconvolution1 = deconvolution(inputs, 81)
+    convolution1 = convolution(deconvolution1, 27)
+    convolution2 = convolution(convolution1, 9)
+    predict = convolution(convolution2, 3)
 
-        image = tf.reshape(max_pool4, [-1, 16, 16, 3])
+    loss = tf.losses.mean_squared_error(labels=targets, predictions=predict)
+    optimizer = tf.train.AdamOptimizer(learning_rate=hps.learning_rate)
+    train_step = optimizer.minimize(loss)
 
-        loss = tf.reduce_mean(tf.square(tf.subtract(image, inputs)))
-        optimizer = tf.train.AdamOptimizer(0.0001)
-        train_step = optimizer.minimize(loss)
+    saver = tf.train.Saver()
+    sess = tf.Session()
+    sess.run(tf.global_variables_initializer())
 
-        sess = tf.Session()
-        sess.run(tf.global_variables_initializer())
+    # saver.restore(sess, './tmp/model.ckpt')
 
-        for step in range(100001):
-            batch_inputs, batch_targets = batch.next_batch()
-            feed_dict = {inputs: batch_inputs, targets: batch_targets}
-            _, loss_val = sess.run([train_step, loss], feed_dict)
-            if step % 1000 == 0:
-                print(step, loss_val)
-
+    for step in range(50001):
         batch_inputs, batch_targets = batch.next_batch()
         feed_dict = {inputs: batch_inputs, targets: batch_targets}
-        img = sess.run(image, feed_dict)
+        _, loss_val = sess.run([train_step, loss], feed_dict)
+        if step % 10000 == 0:
+            save_path = saver.save(sess, './tmp/model.ckpt')
+            print('model saved in %s' % save_path)
+        if step % 1000 == 0:
+            print(step, loss_val)
 
-        data = Image.fromarray(np.asarray(np.clip(batch_inputs[0] * 255, 0, 255), 'uint8'), 'RGB')
-        data.show()
+    test_input = load_images('./images/test_inputs/')
+    test_target = load_images('./images/test_targets/')
 
-        data = Image.fromarray(np.asarray(np.clip(img[0] * 255, 0, 255), 'uint8'), 'RGB')
-        data.show()
+    batch = Batch(test_input, test_target, 1)
+    batch_inputs, batch_targets = batch.next_batch()
 
-        '''
-        data = batch_inputs[0] * 255
-        img = Image.fromarray(np.asarray(np.clip(data, 0, 255), 'uint8'), 'RGB')
+    feed_dict = {inputs: batch_inputs, targets: batch_targets}
+    img = sess.run(predict, feed_dict)
 
-        data = batch_targets[0] * 255
-        img = Image.fromarray(np.asarray(np.clip(data, 0, 255), 'uint8'), 'RGB')
-        '''
+    save_image('./target.jpg', batch_targets[0])
+    save_image('./predict.jpg', img[0])
 
 
 if __name__ == '__main__':
